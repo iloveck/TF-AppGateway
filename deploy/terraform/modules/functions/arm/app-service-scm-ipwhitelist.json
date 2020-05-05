@@ -1,0 +1,39 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": { 
+        "FunctionName": {
+            "type" : "string"
+        }
+    },
+    "variables": {
+       "_force_terraform_to_always_redeploy": "${timestamp()}"
+    },
+    "resources": [{
+       "type":"Microsoft.Web/sites/config",
+           "apiVersion":"2018-11-01",
+           "name":"[concat(parameters('FunctionName'),'/web')]",
+           "location":"[resourceGroup().location]",
+           "properties":{
+              "scmIpSecurityRestrictions":[
+                 {
+                    "ipAddress":"170.172.0.0/16",
+                    "action":"Allow",
+                    "tag":"Default",
+                    "priority":300,
+                    "name":"allow-my-company-server",
+                    "description":"useful description info..."
+                 },
+                 {
+                    "ipAddress":"170.167.0.0/16",
+                    "action":"Allow",
+                    "tag":"Default",
+                    "priority":300,
+                    "name":"allow-my-company-server",
+                    "description":"useful description info..."
+                 }
+              ]
+           }
+      }
+    ]
+  }

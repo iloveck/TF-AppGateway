@@ -1,0 +1,277 @@
+name: $(BuildDefinitionName).$(Build.SourceBranchName)$(Rev:.r)
+
+# Repository declaration
+resources:
+  repositories:
+  - repository: MembershipAutomation
+    type: git
+    name: Membership/Membership-Automation
+    ref:  feature/web_cicd
+
+# Variables Defination
+variables:
+  projectName:  "mglo"
+  componentName:  "web-ui"
+  WebAppName: 'webservertestpoc'
+  WebProjectName: 'mglo-web'
+  NonProdAzureServCon: 'WEBAKSPRD05142019'
+  DevBranch: 'refs/heads/develop'
+  DistributionFolder: 'dist'
+  TestsFolder: 'tests'
+  CoverageFolder: 'coverage'
+  SelfRepositoryName: "MGLO-Web"
+  AutomationRepo: "Membership-Automation"
+
+# During initial development, the "dev" environment will be updated daily at noon
+# from the develop branch. This is to balance keeping it updated with constant deployment instability.
+# the devTesting deployment slot will be updated with feature branches and develop.
+#warning: UTC time
+schedules:
+- cron: "4 19 * * *"
+  displayName: Daily Dev build
+  branches:
+    include:
+    - develop
+  always: false
+# CI Triggers
+trigger:
+- master
+- develop
+- feature/*
+- release/*
+
+# ======================================+=======================================*
+#                                                                               *
+#                                  Build Stage                                  *
+#                                                                               *
+# ==============================================================================*
+
+stages:
+  - stage: Build
+    jobs:
+#======================================+=======================================#
+#                                  Build IAC                                   #
+#==============================================================================#
+    - job: Build_IAC
+      steps:
+      # Checkout Repo : Git clone Repo to agent defautl work folder
+      - checkout: self
+      - checkout: MembershipAutomation
+      # Copy code:   copy TF & PS code (self/automation) to staging folder
+      - task: CopyFiles@2
+        displayName: 'Copy TerraForm Code'
+        inputs:
+          sourceFolder: $(SelfRepositoryName)/deploy/terraform
+          contents: '**'
+          cleanTargetFolder: true
+          TargetFolder: '$(Build.ArtifactStagingDirectory)'
+      - task: CopyFiles@2
+        displayName: 'Copy TerraForm Templates'
+        inputs:
+          sourceFolder: '$(AutomationRepo)/templates/terraform/modules'
+          contents: '**'
+          cleanTargetFolder: false
+          TargetFolder: '$(Build.ArtifactStagingDirectory)/modules'
+          OverWrite: true
+      - task: CopyFiles@2
+        displayName: 'Copy Deploy Powershell Code'
+        inputs:
+          sourceFolder: $(SelfRepositoryName)/deploy/powershell
+          contents: '**'
+          cleanTargetFolder: false
+          TargetFolder: '$(Build.ArtifactStagingDirectory)'
+      # Publish Code:  publish pipeline artifacts in staging foler
+      - task: PublishPipelineArtifact@1
+        displayName: 'Publish IAC Artifacts '
+        inputs:
+          targetPath: '$(Build.ArtifactStagingDirectory)'
+          artifact: 'terraform'
+          publishLocation: 'pipeline'
+
+    #======================================+=======================================#
+    #                                  Build APP                                   #
+    #==============================================================================#
+    - job: Build_APP
+      steps:
+      # Build Task - npm package install, build and test
+      - task: Npm@1
+        displayName: 'Npm Install !'
+        inputs:
+          command: 'install'
+      - script: 'sudo npm install -g @angular/cli@latest'
+        displayName: angularCli install
+      - task: Npm@1
+        displayName: 'Npm Build'
+        inputs:
+          command: 'custom'
+          customCommand: 'run build'
+      - task: Npm@1
+        displayName: 'Npm Test'
+        continueOnError: true
+        inputs:
+          command: 'custom'
+          customCommand: 'run test'
+      # Test Task : run & publish test & CodeCoverRage result to work folder
+      - task: PublishTestResults@2
+        condition: always ()
+        displayName: 'Publish Test Results'
+        inputs:
+          testResultsFormat: 'JUnit' # Options: JUnit, NUnit, VSTest, xUnit, cTest
+          testResultsFiles: '$(System.DefaultWorkingDirectory)/$(TestsFolder)/$(WebProjectName)/*.xml'
+          searchFolder: '$(System.DefaultWorkingDirectory)' # Optional
+          failTaskOnFailedTests: false # Optional
+      - task: PublishCodeCoverageResults@1
+        condition: always ()
+        displayName: 'Publish Code Coverage'
+        inputs:
+          codeCoverageTool: 'Cobertura'
+          summaryFileLocation: '$(System.DefaultWorkingDirectory)/$(CoverageFolder)/$(WebProjectName)/*.xml'
+          reportDirectory: '$(System.DefaultWorkingDirectory)/$(CoverageFolder)/$(WebProjectName)'
+          failIfCoverageEmpty: false
+      - task: ArchiveFiles@2
+        displayName: 'Zip Deployment Files'
+        condition: and(succeeded(), or(eq(variables['force_deployment'], 'true'), eq(variables['Build.SourceBranch'], variables['DevBranch']) ))
+        inputs:
+          rootFolderOrFile: "$(System.DefaultWorkingDirectory)/$(DistributionFolder)/$(WebProjectName)"
+          includeRootFolder: false
+          archiveFile: "$(System.DefaultWorkingDirectory)/build$(Build.BuildId).zip"
+      - task: PublishPipelineArtifact@1
+        displayName: 'Publish Deployment Archive'
+        condition: and(succeeded(), or(eq(variables['force_deployment'], 'true'), eq(variables['Build.SourceBranch'], variables['DevBranch']) ))
+        inputs:
+          targetPath: '$(System.DefaultWorkingDirectory)/build$(Build.BuildId).zip'
+          artifact: $(DistributionFolder)
+          publishLocation: 'pipeline'
+
+# ======================================+=======================================*
+#                                                                               *
+#                                  Deploy Stage                                 *
+#                                                                               *
+# ==============================================================================*
+  - stage: Deploy
+    jobs:
+    - deployment: Deploy_to_Dev
+      condition:  succeeded()
+#     condition: and(succeeded(), or(eq(variables['force_deployment'], 'true'), eq(variables['Build.SourceBranch'], variables['DevBranch']) ))
+      environment: development
+      timeoutInMinutes: 10
+      variables:
+        deploymentEnv: 'dev'
+        subscription: 'az-np-usr-601-MGlo'
+        terraformSa: 'saterraformcicd'
+        terraformRg: 'rg-terraform-cicd'
+      strategy:
+        runOnce:
+          deploy:
+            steps:
+#======================================+=======================================#
+#                             Terraform Deployment                             #
+#==============================================================================#
+            # install TF
+            - task: TerraformInstaller@0
+              displayName: 'Terraform Installer'
+              inputs:
+                terraformVersion: '0.12.23'
+            # add TF SA Ip whitelist
+            - task: AzureCLI@2
+              displayName: 'Add Sa Ip Whitelist'
+              inputs:
+                azureSubscription: $(NonProdAzureServCon)
+                scriptType: 'pscore'
+                scriptLocation: 'inlineScript'
+                inlineScript: '$ip= ((Invoke-WebRequest -Method Get -Uri  http://ipinfo.io/json ).content|ConvertFrom-Json).ip;az storage account network-rule add --resource-group $(terraformRg) --account-name $(terraformSa) --ip-address $ip'
+            # download Iac code
+            - task: DownloadPipelineArtifact@2
+              displayName: 'Download IaC Files'
+              inputs:
+                artifactName: 'terraform'
+                downloadPath: '$(System.DefaultWorkingDirectory)'
+            # TF init
+            - task: TerraformTaskV1@0
+              displayName: 'Terraform Init'
+              inputs:
+                provider: 'azurerm'
+                command: 'init'
+                workingDirectory: '$(System.DefaultWorkingDirectory)/$(deploymentEnv)'
+                backendServiceArm: $(NonProdAzureServCon)
+                backendAzureRmResourceGroupName: $(terraformRg)
+                backendAzureRmStorageAccountName: $(terraformSa)
+                backendAzureRmContainerName: 'terraform'
+                backendAzureRmKey: 'tf/$(ProjectName)-$(ComponentName)/$(deploymentEnv)/terraform.tfstate'
+            # TF Plan
+            - task: TerraformTaskV1@0
+              displayName: 'Terraform Plan'
+              inputs:
+                provider: 'azurerm'
+                command: 'plan'
+                workingDirectory: '$(System.DefaultWorkingDirectory)/$(deploymentEnv)'
+                environmentServiceNameAzureRM: $(NonProdAzureServCon)
+                backendServiceArm: $(NonProdAzureServCon)
+                backendAzureRmResourceGroupName: $(terraformRg)
+                backendAzureRmStorageAccountName: $(terraformSa)
+                backendAzureRmContainerName: 'terraform'
+                backendAzureRmKey: 'tf/$(ProjectName)-$(ComponentName)/$(deploymentEnv)/terraform.tfstate'
+            # TF apply
+            - task: TerraformTaskV1@0
+              displayName: 'Terraform Apply'
+              name: TerraformOutputs
+              inputs:
+                provider: 'azurerm'
+                command: 'apply'
+                commandOptions: '-auto-approve'
+                environmentServiceNameAzureRM: $(NonProdAzureServCon)
+                workingDirectory: '$(System.DefaultWorkingDirectory)/$(deploymentEnv)'
+                backendServiceArm: $(NonProdAzureServCon)
+                backendAzureRmResourceGroupName: $(terraformRg)
+                backendAzureRmStorageAccountName: $(terraformSa)
+                backendAzureRmContainerName: 'terraform'
+                backendAzureRmKey: 'tf/$(ProjectName)-$(ComponentName)/$(deploymentEnv)/terraform.tfstate'
+            # parse TF output for Vnet integration IP
+            - task: AzurePowerShell@5
+              displayName: 'Parse Terraform output'
+              name: 'ParseTerraformOutput'
+              inputs:
+                azureSubscription: $(NonProdAzureServCon)
+                ScriptArguments: '-jsonPath $(TerraformOutput.jsonOutputVariablesPath)'
+                ScriptType: 'InlineScript'
+                Inline: |
+                  $json = Get-Content $(TerraformOutputs.jsonOutputVariablesPath) | Out-String | ConvertFrom-Json
+                  Write-Host "##vso[task.setvariable variable=functionRg]$($json.rg_name.value)"
+                  Write-Host "##vso[task.setvariable variable=functionName]$($json.function_name.value)"
+                azurePowerShellVersion: 'LatestVersion'
+                pwsh: true
+            # Vnet Integration
+            - task: AzureCLI@2
+              displayName: 'Add Vnet Integration'
+              inputs:
+                azureSubscription: $(NonProdAzureServCon)
+                scriptType: 'pscore'
+                scriptLocation: 'inlineScript'
+                inlineScript: |
+                  $json = Get-Content $(TerraformOutputs.jsonOutputVariablesPath) | Out-String | ConvertFrom-Json
+                  az functionapp vnet-integration add --name "$($json.function_name.value)" --resource-group "$($json.rg_name.value)" --subnet "$($json.subnet_name.value)" --vnet "$($json.vnet_name.value)"
+            # remove TF SA ip whitelist
+            - task: AzureCLI@2
+              displayName: 'Remove SA Ip Whitelist'
+              inputs:
+                azureSubscription: $(NonProdAzureServCon)
+                scriptType: 'pscore'
+                scriptLocation: 'inlineScript'
+                inlineScript: '$ip= ((Invoke-WebRequest -Method Get -Uri  http://ipinfo.io/json ).content|ConvertFrom-Json).ip;az storage account network-rule remove --resource-group $(terraformRg) --account-name $(terraformSa) --ip-address $ip'
+
+#======================================+=======================================#
+#                             Deployment to Dev Slot                           #
+#==============================================================================#
+            # Downlaod Function Code
+            - task: DownloadPipelineArtifact@2
+              displayName: 'Download Deployment Archive'
+              inputs:
+                artifactName: $(DistributionFolder)
+                downloadPath: '$(System.DefaultWorkingDirectory)'
+
+            - task: AzureRmWebAppDeployment@4
+              inputs:
+                ConnectionType: 'AzureRM'
+                azureSubscription: $(NonProdAzureServCon)
+                appType: 'webApp'
+                WebAppName: $(WebAppName)

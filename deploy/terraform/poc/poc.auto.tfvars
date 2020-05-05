@@ -1,0 +1,21 @@
+projectName = "mglo"
+componentName = "web-ui"
+location = "westus2"
+environment = "poc"
+VnetName = "az-np-westus2-usr-601-MGlo-network-vnet"
+VnetRGName = "rg-terraform-poc"
+SubnetName = "snet-WebApplicationFirewall-poc"
+FrongEndIPAddr = "172.20.2.5"       # applicationgateway subnet 5th ip add ok
+AppGatewayWAFPolicy = "mglo-web-appgw-waf-policy"
+AppGatewayName = "mglo-web-appgw"
+ssl_certificate_name = "mglo-appgw-dev"
+FunctionName = "mglo-web-ui-poc"
+appgw_fqdns = ["webservertestpoc.azurewebsites.net"]
+app_settings = {
+    SearchApiKey = "3339A3616B72CCB106DC4CC32D62F4AB"
+    SearchServiceName = "membership-adt"
+    SearchPersonIndexName = "person-index"
+    SearchApiDefaultPageSize = "20"
+    WEBSITE_RUN_FROM_PACKAGE = "1"
+    WEBSITE_ENABLE_SYNC_UPDATE_SITE = "true"
+}

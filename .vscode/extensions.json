@@ -1,0 +1,17 @@
+{
+    // List of extensions which should be recommended for users of this workspace.
+    "recommendations": [
+      "nrwl.angular-console",
+      "angular.ng-template",
+      "ms-vscode.vscode-typescript-tslint-plugin",
+      "esbenp.prettier-vscode",
+      "msjsdiag.debugger-for-chrome",
+      "eg2.vscode-npm-script",
+      "johnpapa.angular-essentials",
+      "xyz.local-history",
+      "joelday.docthis",
+      "stringham.move-ts",
+      "christian-kohler.path-intellisense",
+      "simontest.simontest"
+    ]
+  }
